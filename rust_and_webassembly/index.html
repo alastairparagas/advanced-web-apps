@@ -1,0 +1,14 @@
+<html>
+  <head>
+    <title>Rust and WebAssembly</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body>
+    <script type="text/javascript" src="./fibonacci.js"></script>
+    <script type="text/javascript">
+      const { fibonacci } = wasm_bindgen;
+      wasm_bindgen('./fibonacci_bg.wasm')
+        .then(() => console.dir(wasm_bindgen));
+    </script>
+  </body>
+</html>

@@ -1,0 +1,40 @@
+<html>
+  <head>
+    <title>WASM import</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body>
+    <script type="text/javascript">
+      let add_integer = null;
+      let add_float = null;
+      let fibonacci = null;
+      
+      fetch('./add.wasm').then(response =>
+        response.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.instantiate(bytes, {})
+      ).then(results => {
+        add_integer = results.instance.exports.add;
+        console.log("Compiled Integer Add WASM");
+      });
+      
+      fetch('./add_float.wasm').then(response =>
+        response.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.instantiate(bytes, {})
+      ).then(results => {
+        add_float = results.instance.exports.add;
+        console.log("Compiled Float Add WASM");
+      });
+      
+      fetch('./fibonacci.wasm').then(response =>
+        response.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.instantiate(bytes, {})
+      ).then(results => {
+        fibonacci = results.instance.exports.fib;
+        console.log("Compiled Fibonacci WASM");
+      });
+    </script>
+  </body>
+</html>

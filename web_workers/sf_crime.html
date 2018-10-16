@@ -1,0 +1,180 @@
+<html>
+  <head>
+    <title>San Francisco Crime</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A map of San Francisco criminal incidents">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.3.3/dist/leaflet.css"
+   integrity="sha512-Rksm5RenBEKSKFjgI3a41vrjkw4EVPlJ3+OiI65vTjIdo9brlAacEuKOiQ5OFh7cOI1bkDwLqdLw3Zg0cRJAAQ=="
+   crossorigin=""/>
+    <style type="text/css">
+      #map_interface { 
+        position: absolute;
+        height: 100vh;
+        width: 100vw;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+    
+  </head>
+  <body>
+    <div id="map_interface"></div>
+    
+    <script src="https://unpkg.com/leaflet@1.3.3/dist/leaflet.js"
+     integrity="sha512-tAGcCfR4Sc5ZP5ZoVz0quoZDYX5aCtEm/eu1KhSLj2c9eFrylXZknQYmxUssFaVJKvvc0dJQixhGjG2yXWiV9Q=="
+     crossorigin=""></script>
+    <script type="text/javascript">
+      const map_interface = L.map('map_interface', {
+        center: [37.7749, -122.4194],
+        zoom: 14
+      });
+      L.tileLayer('https://api.tiles.mapbox.com/v4/{id}/{z}/{x}/{y}.png?access_token={accessToken}', {
+        attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors, <a href="https://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>, Imagery © <a href="https://www.mapbox.com/">Mapbox</a>', 
+        maxZoom: 18,
+        id: 'mapbox.streets',
+        accessToken: 'pk.eyJ1IjoiYWxhc3RhaXJwYXJhZ2FzIiwiYSI6ImNqa2Zpeml0azA3c3Uzd3FnYmF0Y2NxeHQifQ.1O373Eg519MobdBA1E6sUw'
+      }).addTo(map_interface);
+      
+      // Dynamically creates a web worker from a given executor function
+      function createWorker(executorFunction) {
+        const blob = new Blob(['self.onmessage = ', executorFunction.toString().trim(), ';'], {
+          type: 'text/javascript'
+        });
+        
+        return new Worker(URL.createObjectURL(blob));
+      }
+      
+      // Specific worker for doing SF Crime Data clustering by crime rate
+      const clustererAndRankererWorker = createWorker((event) => {
+        const CLUSTERS = 5;
+        
+        const crimeAggregate = JSON.parse(event.data).map((crime) => {
+          return {
+            latitude: crime.latitude,
+            longitude: crime.longitude,
+            pddistrict: crime.police_district.toUpperCase(),
+            category: crime.incident_category
+          };
+        }).reduce((aggregate, crime) => {
+          if (!(crime.pddistrict in aggregate)) {
+            aggregate[crime.pddistrict] = {
+              count: 0,
+              list: [],
+              pddistrict: crime.pddistrict
+            }
+          }
+          
+          aggregate[crime.pddistrict].count += 1;
+          aggregate[crime.pddistrict].list.push({
+            lat: crime.latitude,
+            long: crime.longitude,
+            category: crime.category
+          });
+          return aggregate;
+        }, {});
+        
+        const rankByCrimeCount = Object.values(crimeAggregate).sort((district1, district2) => {
+          if (district1.count < district2.count) {
+            return -1;
+          }
+          if (district1.count > district2.count) {
+            return 1;
+          }
+          return 0;
+        });
+        
+        const crimeAggregateClustered = (() => {
+          const minCount = rankByCrimeCount[0].count;
+          const maxCount = rankByCrimeCount[rankByCrimeCount.length - 1].count;
+          const partsSize = (maxCount - minCount) / CLUSTERS;
+          const aggregate = {};
+          
+          const clusterLabels = (new Array(CLUSTERS).fill(null)).map((_, index) => {
+            return String(index + 1);
+          });
+          for (const clusterLabel of clusterLabels) {
+            aggregate[clusterLabel] = [];
+          }
+          
+          return Object.values(crimeAggregate).reduce((aggregate, pddistrict) => {
+            const differenceFromMinCount = pddistrict.count - minCount;
+            let cluster = String(Math.ceil(differenceFromMinCount / partsSize));
+            if (cluster === "0" || cluster === "NaN") {
+              cluster = "1";
+            }
+            
+            aggregate[cluster].push(pddistrict);
+            
+            return aggregate;
+          }, aggregate);
+        })();
+        self.postMessage(crimeAggregateClustered);
+      });
+      
+      // Combines web worker "work" and map painting
+      async function clusterRankDistrictsInMap(sfCrimeData) {
+        const clusteredAndRankedData = await new Promise((resolve, reject) => {
+          const workerEventListener = (message) => {
+            resolve(message.data);
+            clustererAndRankererWorker.removeEventListener("message", workerEventListener);
+          };
+          clustererAndRankererWorker.postMessage(sfCrimeData)
+          clustererAndRankererWorker.addEventListener("message", workerEventListener);
+        });
+        
+        const geoJsonData = await fetch("/sf_crime/police_districts.geojson")
+          .catch(() => window.alert("Could not load SF Police District GeoJSON"))
+          .then(res => res.json());
+        
+        L.geoJson(geoJsonData, {
+          style: (feature) => {
+            const policeDistrict = feature.properties.district;
+            for (const clusterId of Object.keys(clusteredAndRankedData)) {
+              const policeDistricts = clusteredAndRankedData[clusterId].map(
+                ({pddistrict}) => pddistrict
+              );
+              
+              if (!policeDistricts.includes(policeDistrict)) {
+                continue;
+              }
+              
+              if (clusterId === "1") {
+                return {
+                  fillColor: "#0000ff"
+                };
+              } else if (clusterId === "2") {
+                return {
+                  fillColor: "#7f7fff"
+                };
+              } else if (clusterId === "3") {
+                return {
+                  fillColor: "#ff00ff"
+                };
+              } else if (clusterId === "4") {
+                return {
+                  fillColor: "#ff7f7f"
+                };
+              } else if (clusterId === "5") {
+                return {
+                  fillColor: "#ff0000"
+                };
+              } else {
+                return {
+                  fillColor: "#d3d3d3"
+                };
+              }
+            }
+          }
+        }).addTo(map_interface);
+      }
+      
+      // Let the main program run!
+      fetch("https://data.sfgov.org/resource/nwbb-fxkq.json?$limit=50000")
+        .catch(() => window.alert("Could not load SF Crime data"))
+        .then(res => res.text())
+        .then(res => clusterRankDistrictsInMap(res));
+    </script>
+  </body>
+</html>
